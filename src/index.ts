@@ -133,8 +133,7 @@ client.on("message_create", async (msg: Message) => {
   console.log(`📨 [${chatId}] ${senderName}: ${userMessage}`);
 
   try {
-    const chatObj = await msg.getChat();
-    await chatObj.sendStateTyping();
+    await msg.reply("⏳ Processing your request...");
 
     const reply = await runAgent(chatId, senderName, userMessage, participants);
 

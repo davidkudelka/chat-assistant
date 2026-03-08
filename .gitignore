@@ -8,3 +8,6 @@ dist/
 # WhatsApp session data
 .wwebjs_auth/
 .wwebjs_cache/
+
+# Runtime data
+data/

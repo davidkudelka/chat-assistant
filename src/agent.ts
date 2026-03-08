@@ -3,6 +3,7 @@ import { config, getPeopleList, resolvePerson, Person } from "./config.js";
 import { getHistory, pushExchange } from "./conversation-store.js";
 import { sendICSInvite, sendICSUpdate, sendICSCancel } from "./ics-invite.js";
 import { getMCPTools, callMCPTool } from "./mcp-client.js";
+import { createGymPackage, getActiveGymPackage, useGymSession, cancelGymSession } from "./db.js";
 
 const anthropic = new Anthropic({ apiKey: config.anthropicApiKey });
 
@@ -121,6 +122,63 @@ const LOCAL_TOOLS: Anthropic.Tool[] = [
       required: ["name"],
     },
   },
+  {
+    name: "gym_buy_sessions",
+    description:
+      "Register a new prepaid gym session package. Creates a new active package with the given number of sessions.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        total_sessions: {
+          type: "number",
+          description: "Number of prepaid sessions purchased",
+        },
+      },
+      required: ["total_sessions"],
+    },
+  },
+  {
+    name: "gym_get_remaining",
+    description:
+      "Check how many prepaid gym sessions remain in the active package. " +
+      "Returns total, used, and remaining session counts.",
+    input_schema: {
+      type: "object" as const,
+      properties: {},
+    },
+  },
+  {
+    name: "gym_use_session",
+    description:
+      "Record a gym session as used. Call this AFTER creating the calendar event. " +
+      "Returns the session number (e.g. 3/10) to include in the event title.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        gcal_event_id: {
+          type: "string",
+          description: "The Google Calendar event ID of the gym session",
+        },
+      },
+      required: ["gcal_event_id"],
+    },
+  },
+  {
+    name: "gym_cancel_session",
+    description:
+      "Undo a gym session usage when a gym event is cancelled. " +
+      "Restores the session back to the package.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        gcal_event_id: {
+          type: "string",
+          description: "The Google Calendar event ID of the cancelled gym session",
+        },
+      },
+      required: ["gcal_event_id"],
+    },
+  },
 ];
 
 const LOCAL_TOOL_NAMES = new Set(LOCAL_TOOLS.map((t) => t.name));
@@ -211,6 +269,72 @@ async function executeLocalTool(name: string, input: Record<string, unknown>): P
       return JSON.stringify({ found: true, ...person });
     }
 
+    case "gym_buy_sessions": {
+      const total = input.total_sessions as number;
+      const pkg = createGymPackage(total);
+      return JSON.stringify({
+        status: "created",
+        package_id: pkg.id,
+        total_sessions: pkg.total_sessions,
+        used_sessions: 0,
+        remaining: pkg.total_sessions,
+      });
+    }
+
+    case "gym_get_remaining": {
+      const pkg = getActiveGymPackage();
+      if (!pkg) {
+        return JSON.stringify({
+          status: "no_active_package",
+          message: "No active gym session package found",
+        });
+      }
+      return JSON.stringify({
+        package_id: pkg.id,
+        total_sessions: pkg.total_sessions,
+        used_sessions: pkg.used_sessions,
+        remaining: pkg.total_sessions - pkg.used_sessions,
+      });
+    }
+
+    case "gym_use_session": {
+      const pkg = getActiveGymPackage();
+      if (!pkg) {
+        return JSON.stringify({
+          status: "error",
+          message: "No active gym session package. Buy sessions first.",
+        });
+      }
+      if (pkg.used_sessions >= pkg.total_sessions) {
+        return JSON.stringify({
+          status: "exhausted",
+          message: "All sessions have been used. Buy a new package.",
+          total: pkg.total_sessions,
+          used: pkg.used_sessions,
+        });
+      }
+      const sessionNumber = pkg.used_sessions + 1;
+      useGymSession(pkg.id, input.gcal_event_id as string, sessionNumber);
+      return JSON.stringify({
+        status: "ok",
+        session_number: sessionNumber,
+        total: pkg.total_sessions,
+        remaining: pkg.total_sessions - sessionNumber,
+        label: `${sessionNumber}/${pkg.total_sessions}`,
+      });
+    }
+
+    case "gym_cancel_session": {
+      const cancelled = cancelGymSession(input.gcal_event_id as string);
+      if (!cancelled) {
+        return JSON.stringify({
+          status: "not_found",
+          message: "No gym session found for this event",
+        });
+      }
+      return JSON.stringify({ status: "restored", message: "Session restored to package" });
+    }
+
     default:
       return JSON.stringify({ error: `Unknown tool: ${name}` });
   }
@@ -295,6 +419,32 @@ You have access to:
 - When listing events, format them cleanly: date, time, title, attendees.
 - After cross-platform operations, briefly confirm that all calendar users have been notified.
 - ALWAYS pass gcal_event_id to ICS tools — this is how we track events across updates.
+
+## Gym Training
+
+### Session packages
+- Users prepay a number of gym sessions (e.g. 10). Use gym_buy_sessions to register a new package.
+- Use gym_get_remaining to check how many sessions are left.
+- Each gym event uses one session from the active package.
+
+### Creating a gym session:
+1. Call gym_get_remaining to check there are sessions available
+2. Create the event on Google Calendar via MCP:
+   - Duration: always 1 hour
+   - Location: always "Next Move, Vinohrady"
+   - Invite the gym trainer (registered as "gym-trainer" in the people registry)
+3. Call gym_use_session with the gcal_event_id — this returns the session label (e.g. "3/10")
+4. Update the event title to "Gym session 3/10 - {sender name}" using the label from gym_use_session
+5. No need to confirm — gym training requests are always unambiguous.
+6. If no active package exists or all sessions are used, tell the user.
+
+### Cancelling a gym session:
+1. Delete the event on Google Calendar
+2. Call gym_cancel_session with the gcal_event_id — this restores the session to the package
+
+### Querying:
+- "how many gym sessions left" → call gym_get_remaining
+- "buy 10 gym sessions" → call gym_buy_sessions
 
 ## Important
 - Default event duration is 1 hour unless specified.

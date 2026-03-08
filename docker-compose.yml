@@ -1,0 +1,15 @@
+services:
+  bot:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - DATA_DIR=/app/data
+      - GOOGLE_OAUTH_CREDENTIALS=/app/gcp-oauth.keys.json
+    volumes:
+      - ./data:/app/data
+      - ./wwebjs_auth:/app/.wwebjs_auth
+      - ${GOOGLE_OAUTH_CREDENTIALS}:/app/gcp-oauth.keys.json:ro
+      - ~/.config/google-calendar-mcp:/root/.config/google-calendar-mcp
+    stdin_open: true
+    tty: true

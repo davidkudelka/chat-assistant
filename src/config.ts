@@ -68,6 +68,9 @@ export const config = {
   // Resend settings for sending .ics invites
   resendApiKey: process.env.RESEND_API_KEY ?? "",
   emailFrom: process.env.EMAIL_FROM ?? "Calendar Bot <onboarding@resend.dev>",
+
+  // OpenAI Whisper for voice message transcription
+  openaiApiKey: process.env.OPENAI_API_KEY ?? "",
 } as const;
 
 export function validateConfig(): void {

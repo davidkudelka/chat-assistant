@@ -1,11 +1,11 @@
 # WhatsApp Calendar Bot (AI-Powered, Cross-Platform)
 
-An agentic WhatsApp bot that uses **Claude + Google Calendar MCP** to schedule and manage meetings between people in a group chat — even when attendees use **different calendar apps** (Google Calendar, Apple Calendar, Outlook).
+An agentic WhatsApp bot that uses **Claude + Google Calendar MCP** to schedule and manage meetings — even when attendees use **different calendar apps** (Google Calendar, Apple Calendar, Outlook). Includes **gym session package tracking** with SQLite persistence.
 
 ## Architecture
 
 ```
-WhatsApp Group Chat
+WhatsApp (message_create)
        │
        ▼
   whatsapp-web.js         ← listens for "@bot ..." messages
@@ -13,9 +13,15 @@ WhatsApp Group Chat
        ▼
   Claude Agent (Sonnet)   ← agentic loop, decides what tools to call
        │
-       ├──► Google Calendar MCP   ← create/list/update/delete events
+       ├──► Google Calendar MCP   ← create/list/update/delete events (via @modelcontextprotocol/sdk)
        ├──► lookup_person         ← check registry + calendar provider
-       └──► send_ics_invite       ← send .ics email to Apple/Outlook users
+       ├──► send_ics_invite       ← send .ics email via Resend to Apple/Outlook users
+       ├──► gym_buy_sessions      ← register prepaid gym session package
+       ├──► gym_use_session       ← track session usage (3/10, etc.)
+       └──► gym_get_remaining     ← check remaining sessions
+       │
+       ▼
+  SQLite (better-sqlite3)  ← persists gym packages, session logs, ICS event tracking
 ```
 
 ### How Cross-Platform Scheduling Works
@@ -23,8 +29,7 @@ WhatsApp Group Chat
 The event lives on **Google Calendar** (as the source of truth). Cross-platform delivery works because:
 
 1. **Google Calendar users** — Google auto-adds the event when they're listed as an attendee
-2. **Apple Calendar users** — receive an email invite with an `.ics` attachment that Apple Calendar picks up natively. The bot also calls `send_ics_invite` as a fallback for guaranteed delivery.
-3. **Outlook users** — same `.ics` mechanism as Apple; Outlook natively handles calendar invites via email
+2. **Apple Calendar / Outlook users** — receive an email invite with an `.ics` attachment via Resend
 
 No separate Apple/iCloud API integration is needed. The iCalendar (`.ics`) standard is universal.
 
@@ -40,7 +45,6 @@ No separate Apple/iCloud API integration is needed. The iCalendar (`.ics`) stand
 ```
 @bot what meetings do Alice and Bob have this week?
 @bot show me Alice's schedule for Friday
-@bot when is the next meeting between Alice and Bob?
 ```
 
 **Manage events:**
@@ -49,22 +53,21 @@ No separate Apple/iCloud API integration is needed. The iCalendar (`.ics`) stand
 @bot move the Alice/Bob sync to 3pm
 ```
 
-**Free-form questions:**
+**Gym training sessions:**
 ```
-@bot is Bob free tomorrow afternoon?
-@bot find a slot for Alice and Bob next week, 30 minutes
+@bot buy 10 gym sessions
+@bot gym training next Wednesday at 8:30
+@bot how many gym sessions do I have left?
+@bot cancel last gym session
 ```
 
 ## Setup
 
 ### 1. Prerequisites
 
-- **Node.js** ≥ 18
-- **Chromium** installed (for Puppeteer/WhatsApp Web)
+- **Node.js** >= 22
 - **Anthropic API key** with access to Claude Sonnet
-- **Google Calendar MCP server** — either:
-  - Anthropic's hosted MCP (`https://gcal.mcp.claude.com/mcp`) if you have access
-  - Self-hosted: [google-calendar-mcp](https://github.com/anthropics/google-calendar-mcp)
+- **Google Cloud OAuth credentials** (for Google Calendar API)
 
 ### 2. Install
 
@@ -74,60 +77,56 @@ cd whatsapp-calendar-bot
 npm install
 ```
 
-### 3. Configure
+### 3. Google Calendar MCP Setup
+
+#### Create OAuth credentials
+
+1. Go to [Google Cloud Console](https://console.cloud.google.com/)
+2. Create a project and enable the **Google Calendar API**
+3. APIs & Services > Credentials > Create Credentials > **OAuth client ID** (Desktop app)
+4. Download the JSON file, save as `~/.config/gcp-oauth.keys.json`
+5. OAuth consent screen > Audience > add your email as a test user
+6. Set publishing status to **Production** (avoids 7-day token expiry)
+
+#### Authenticate
+
+```bash
+GOOGLE_OAUTH_CREDENTIALS=~/.config/gcp-oauth.keys.json npx @cocal/google-calendar-mcp auth
+```
+
+This opens a browser for Google OAuth. Tokens are saved locally and auto-refresh.
+
+### 4. Configure
 
 ```bash
 cp .env.example .env
 ```
 
-Fill in:
-
 | Variable | Required | Description |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | ✅ | Your Anthropic API key |
-| `GCAL_MCP_URL` | ✅ | Google Calendar MCP endpoint |
-| `PEOPLE_MAP` | ✅ | Name-to-email mapping (see below) |
-| `BOT_TRIGGER` | | Trigger keyword, default `@bot` |
-| `TIMEZONE` | | IANA timezone, default `Europe/Prague` |
-| `ALLOWED_CHATS` | | Restrict to specific WhatsApp chat IDs |
+| `ANTHROPIC_API_KEY` | Yes | Your Anthropic API key |
+| `GCAL_MCP_COMMAND` | Yes* | MCP command, e.g. `npx @cocal/google-calendar-mcp` |
+| `GOOGLE_OAUTH_CREDENTIALS` | Yes* | Path to OAuth credentials JSON |
+| `GCAL_MCP_URL` | Yes* | Alternative: HTTP MCP endpoint (use instead of COMMAND) |
+| `PEOPLE_MAP` | Yes | Name-to-email mapping (see below) |
+| `RESEND_API_KEY` | | For `.ics` email delivery to non-Google users |
+| `EMAIL_FROM` | | Sender address (default: `Calendar Bot <onboarding@resend.dev>`) |
+| `BOT_TRIGGER` | | Trigger keyword (default: `@bot`) |
+| `TIMEZONE` | | IANA timezone (default: `Europe/Prague`) |
+| `OPENAI_API_KEY` | | For voice message transcription via Whisper |
+| `ALLOWED_CHATS` | | Comma-separated WhatsApp chat IDs to restrict access |
+
+*Either `GCAL_MCP_COMMAND` + `GOOGLE_OAUTH_CREDENTIALS` or `GCAL_MCP_URL` is required.
 
 #### People Registry
 
 The `PEOPLE_MAP` tells the bot each person's email and calendar provider:
 
 ```env
-PEOPLE_MAP=Alice=alice@gmail.com:google,Bob=bob@icloud.com:apple,Charlie=charlie@outlook.com:outlook
+PEOPLE_MAP=Alice=alice@gmail.com:google,Bob=bob@icloud.com:apple,gym-trainer=trainer@email.com:google
 ```
 
 Supported providers: `google`, `apple`, `outlook`, `other` (defaults to `google` if omitted).
-
-When scheduling between Alice (Google) and Bob (Apple), the bot:
-1. Creates the event on Google Calendar with both as attendees
-2. Google sends Alice's invite automatically
-3. Calls `send_ics_invite` to email Bob a `.ics` file that Apple Calendar picks up
-
-### 4. MCP Server Setup
-
-#### Option A: Self-hosted Google Calendar MCP
-
-If you're self-hosting the MCP server:
-
-```bash
-# In a separate terminal
-npx @anthropic-ai/google-calendar-mcp --port 3001
-# Then set GCAL_MCP_URL=http://localhost:3001/mcp in .env
-```
-
-You'll need to authenticate with Google OAuth on first run.
-
-#### Option B: Anthropic's hosted MCP
-
-If you have access to Anthropic's hosted MCP connectors, use:
-```env
-GCAL_MCP_URL=https://gcal.mcp.claude.com/mcp
-```
-
-Note: this requires proper authentication headers which you may need to configure.
 
 ### 5. Run
 
@@ -139,54 +138,70 @@ npm run dev
 npm run build && npm start
 ```
 
-On first launch, scan the QR code in your terminal with WhatsApp → Linked Devices.
+On first launch, scan the QR code in your terminal with WhatsApp > Linked Devices.
+
+### 6. Docker Deployment (Raspberry Pi)
+
+See **[DEPLOYMENT.md](DEPLOYMENT.md)** for the full step-by-step guide (Docker install, code sync, credential setup, QR scan).
+
+Quick start:
+
+```bash
+docker compose up -d --build
+```
+
+Data is persisted via volumes:
+- `./data/` — SQLite database (`bot.db`)
+- `./wwebjs_auth/` — WhatsApp session (no re-scan needed after restart)
+- Google OAuth credentials mounted read-only
+
+### Voice Messages
+
+Voice messages sent to allowed chats are automatically transcribed via **OpenAI Whisper** and processed as regular commands — no trigger keyword needed. Requires `OPENAI_API_KEY` in `.env`.
 
 ## How It Works
 
-1. **Message arrives** in WhatsApp starting with `@bot`
+1. **Message arrives** in WhatsApp — text starting with `@bot`, or a voice message
 2. **Trigger stripped**, sender name and group participants extracted
-3. **Claude agent invoked** with:
-   - System prompt containing the people registry, timezone, today's date
-   - Conversation history (last 20 messages, 30-min TTL per chat)
-   - Google Calendar MCP server for tool use
-4. **Agentic loop**: Claude calls MCP tools (list events, create event, etc.) as many times as needed
+3. **Claude agent invoked** with system prompt (people registry, timezone, date), conversation history, and all tools (MCP + local)
+4. **Agentic loop**: Claude calls tools as needed — up to 10 rounds
 5. **Final text response** sent back to WhatsApp as a reply
 
 ### Conversation Memory
 
-The bot maintains per-chat conversation history (up to 20 messages, 30-min TTL) so you can have multi-turn interactions:
+Per-chat history (up to 20 messages, 30-min TTL) enables multi-turn interactions:
 
 ```
 You:  @bot schedule Alice and Bob tomorrow at 2pm for a design review
-Bot:  ✅ Created "Design Review" for tomorrow 2:00-3:00 PM with Alice and Bob
+Bot:  ✅ Created "Design Review" for tomorrow 2:00-3:00 PM
 You:  @bot actually make it 90 minutes
 Bot:  ✅ Updated to 2:00-3:30 PM
 ```
+
+### Gym Session Tracking
+
+Prepaid gym session packages are tracked in SQLite. Each gym event title includes the session number (e.g. "Gym session 3/10 - David"). Cancelling a session restores it to the package. The bot warns when sessions are running low or exhausted.
 
 ## Project Structure
 
 ```
 src/
-├── index.ts               # WhatsApp client + message routing
-├── config.ts              # Env loading, people registry with calendar providers
+├── index.ts               # WhatsApp client + message routing + lifecycle
+├── config.ts              # Env loading, people registry
 ├── agent.ts               # Claude agentic loop (MCP + local tools)
-├── ics-invite.ts          # .ics generator + SMTP sender for Apple/Outlook
-└── conversation-store.ts  # Per-chat message history
+├── mcp-client.ts          # MCP SDK client (stdio + HTTP/SSE transports)
+├── db.ts                  # SQLite schema + gym packages + ICS event tracking
+├── ics-invite.ts          # .ics generator + Resend email sender
+└── conversation-store.ts  # In-memory per-chat message history
 ```
-
-## Extending
-
-- **Add more MCP servers**: Pass additional entries in the `mcp_servers` array in `agent.ts` (e.g., Slack MCP to also post in a channel)
-- **Richer people registry**: Move `PEOPLE_MAP` to a JSON file or database for larger teams
-- **Approval flow**: Modify the system prompt to always confirm before creating — the multi-turn history already supports this
-- **Private chats**: The bot works in 1:1 chats too, not just groups
 
 ## Troubleshooting
 
 | Issue | Fix |
 |---|---|
 | No QR code | Ensure Chromium is installed: `sudo apt install chromium-browser` |
-| MCP auth errors | Check your MCP server is running and authenticated with Google |
+| MCP auth errors | Re-run the `npx @cocal/google-calendar-mcp auth` command |
 | Bot not responding | Verify message starts with the trigger (`@bot` by default) |
-| Wrong timezone | Set `TIMEZONE` in `.env` to your IANA timezone |
+| OAuth token expired | Publish app to Production in Google Cloud Console |
 | "Person not found" | Add them to `PEOPLE_MAP` in `.env` |
+| Data lost on restart | Ensure Docker volumes are mounted (`./data`, `./wwebjs_auth`) |

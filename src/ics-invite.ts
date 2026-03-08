@@ -1,47 +1,7 @@
 import { Resend } from "resend";
 import { config, Person } from "./config.js";
 import { v4 as uuid } from "uuid";
-
-// ────────────────────────────────────────────────────
-// Event tracking store
-// Maps Google Calendar eventId → ICS metadata so we
-// can send proper UPDATE / CANCEL .ics files later.
-// ────────────────────────────────────────────────────
-
-interface TrackedEvent {
-  icsUid: string;
-  sequence: number;
-  gcalEventId: string;
-  title: string;
-  nonGoogleRecipients: string[]; // emails
-}
-
-const eventStore = new Map<string, TrackedEvent>();
-
-export function trackEvent(
-  gcalEventId: string,
-  icsUid: string,
-  title: string,
-  nonGoogleEmails: string[],
-): void {
-  eventStore.set(gcalEventId, {
-    icsUid,
-    sequence: 0,
-    gcalEventId,
-    title,
-    nonGoogleRecipients: nonGoogleEmails,
-  });
-}
-
-export function getTrackedEvent(gcalEventId: string): TrackedEvent | null {
-  return eventStore.get(gcalEventId) ?? null;
-}
-
-export function removeTrackedEvent(gcalEventId: string): TrackedEvent | null {
-  const event = eventStore.get(gcalEventId);
-  if (event) eventStore.delete(gcalEventId);
-  return event ?? null;
-}
+import { storeICSEvent, getICSEvent, incrementICSSequence, removeICSEvent } from "./db.js";
 
 // ────────────────────────────────────────────────────
 // ICS generation
@@ -167,8 +127,8 @@ export async function sendICSInvite(
   const nonGoogleRecipients = recipients.filter((p) => p.calendar !== "google");
   const nonGoogleEmails = nonGoogleRecipients.map((p) => p.email);
 
-  // Track the event for future updates/cancellations
-  trackEvent(event.gcalEventId, icsUid, event.title, nonGoogleEmails);
+  // Track the event in the database for future updates/cancellations
+  storeICSEvent(event.gcalEventId, icsUid, event.title, nonGoogleEmails);
 
   return sendICSEmail(nonGoogleRecipients, {
     uid: icsUid,
@@ -202,24 +162,21 @@ export async function sendICSUpdate(
     allAttendees: { email: string; name?: string }[];
   },
 ): Promise<SendResult> {
-  const tracked = getTrackedEvent(event.gcalEventId);
+  const tracked = getICSEvent(event.gcalEventId);
 
   if (!tracked) {
     // No prior .ics was sent — treat as a new invite
     return sendICSInvite(recipients, event);
   }
 
-  // Increment sequence number
-  tracked.sequence += 1;
-  tracked.title = event.title;
+  // Increment sequence number in DB
+  const newSequence = incrementICSSequence(event.gcalEventId, event.title);
 
-  // Update recipient list in case attendees changed
   const nonGoogleRecipients = recipients.filter((p) => p.calendar !== "google");
-  tracked.nonGoogleRecipients = nonGoogleRecipients.map((p) => p.email);
 
   return sendICSEmail(nonGoogleRecipients, {
-    uid: tracked.icsUid,
-    sequence: tracked.sequence,
+    uid: tracked.ics_uid,
+    sequence: newSequence,
     method: "REQUEST",
     status: "CONFIRMED",
     title: event.title,
@@ -246,20 +203,19 @@ export async function sendICSCancel(
     allAttendees: { email: string; name?: string }[];
   },
 ): Promise<SendResult> {
-  const tracked = removeTrackedEvent(gcalEventId);
+  const tracked = removeICSEvent(gcalEventId);
 
   if (!tracked) {
     // We never sent an .ics for this event — nothing to cancel
     return { sent: [], skipped: [], errors: [], icsUid: "" };
   }
 
-  tracked.sequence += 1;
-
+  const newSequence = tracked.sequence + 1;
   const nonGoogleRecipients = recipients.filter((p) => p.calendar !== "google");
 
   return sendICSEmail(nonGoogleRecipients, {
-    uid: tracked.icsUid,
-    sequence: tracked.sequence,
+    uid: tracked.ics_uid,
+    sequence: newSequence,
     method: "CANCEL",
     status: "CANCELLED",
     title: tracked.title,

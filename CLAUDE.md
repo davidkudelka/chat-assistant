@@ -48,6 +48,7 @@ Volumes persist SQLite data (`./data/`), WhatsApp session (`./wwebjs_auth/`), an
 ### Tool architecture
 
 All tools appear as standard `tool_use` blocks. The agent has two categories:
+
 1. **MCP tools** — Discovered from the Google Calendar MCP server at startup, converted to Anthropic tool format. Executed via `callMCPTool()`.
 2. **Local tools** — Defined in `agent.ts` as `LOCAL_TOOLS`: ICS tools (`send_ics_invite`, `send_ics_update`, `send_ics_cancel`), `lookup_person`, gym tools (`gym_buy_sessions`, `gym_get_remaining`, `gym_use_session`, `gym_cancel_session`).
 
@@ -64,3 +65,63 @@ For stdio MCP (recommended): set `GCAL_MCP_COMMAND=npx @cocal/google-calendar-mc
 `RESEND_API_KEY` + `EMAIL_FROM` needed for `.ics` email delivery to non-Google calendar users.
 
 `PEOPLE_MAP` format: `Name=email:provider` comma-separated. Provider defaults to `google`. Supported: `google`, `apple`, `outlook`, `other`. Special entry `gym-trainer` is used by the gym session flow.
+
+## Workflow Orchestration
+
+### 1. Plan Mode Default
+
+- Enter plan mode for ANY non-trivial task (3+ steps or architectural decisions)
+- If something goes sideways, STOP and re-plan immediately - don't keep pushing
+- Use plan mode for verification steps, not just building
+- Write detailed specs upfront to reduce ambiguity
+
+### 2. Subagent Strategy
+
+- Use subagents liberally to keep main context window clean
+- Offload research, exploration, and parallel analysis to subagents
+- For complex problems, throw more compute at it via subagents
+- One task per subagent for focused execution
+
+### 3. Self-Improvement Loop
+
+- After ANY correction from the user: update `tasks/lessons.md` with the pattern
+- Write rules for yourself that prevent the same mistake
+- Ruthlessly iterate on these lessons until mistake rate drops
+- Review lessons at session start for relevant project
+
+### 4. Verification Before Done
+
+- **Always run `bun typecheck` and `bun lint` after making changes** — fix all errors before presenting work as done
+- Never mark a task complete without proving it works
+- Diff behavior between main and your changes when relevant
+- Ask yourself: "Would a staff engineer approve this?"
+- Run tests, check logs, demonstrate correctness
+
+### 5. Demand Elegance (Balanced)
+
+- For non-trivial changes: pause and ask "is there a more elegant way?"
+- If a fix feels hacky: "Knowing everything I know now, implement the elegant solution"
+- Skip this for simple, obvious fixes - don't over-engineer
+- Challenge your own work before presenting it
+
+### 6. Autonomous Bug Fixing
+
+- When given a bug report: just fix it. Don't ask for hand-holding
+- Point at logs, errors, failing tests - then resolve them
+- Zero context switching required from the user
+- Go fix failing CI tests without being told how
+
+## Task Management
+
+1. **Plan First:** Write plan to `tasks/todo.md` with checkable items
+2. **Verify Plan:** Check in before starting implementation
+3. **Track Progress:** Mark items complete as you go
+4. **Explain Changes:** High-level summary at each step
+5. **Document Results:** Add review section to `tasks/todo.md`
+6. **Capture Lessons:** Update `tasks/lessons.md` after corrections
+
+## Core Principles
+
+- **Simplicity First:** Make every change as simple as possible. Impact minimal code.
+- **No Laziness:** Find root causes. No temporary fixes. Senior developer standards.
+- **Minimal Impact:** Changes should only touch what's necessary. Avoid introducing bugs.

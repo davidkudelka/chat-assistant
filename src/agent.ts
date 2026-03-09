@@ -13,7 +13,7 @@ import {
 
 const anthropic = new Anthropic({ apiKey: config.anthropicApiKey });
 
-const MODEL = "claude-sonnet-4-20250514";
+const MODEL = process.env.CLAUDE_MODEL || "claude-haiku-4-5-20251001";
 const MAX_TOOL_ROUNDS = 10;
 
 // ── Local tools (non-MCP) that the agent can call ──

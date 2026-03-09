@@ -69,6 +69,15 @@ export function getAllGymPackages(): GymPackage[] {
   return stmt.all() as GymPackage[];
 }
 
+export function setGymPackage(totalSessions: number, usedSessions: number): GymPackage {
+  // Deactivate any existing active package
+  db.prepare("UPDATE gym_packages SET active = 0 WHERE active = 1").run();
+  const stmt = db.prepare(
+    "INSERT INTO gym_packages (total_sessions, used_sessions) VALUES (?, ?) RETURNING *",
+  );
+  return stmt.get(totalSessions, usedSessions) as GymPackage;
+}
+
 export function useGymSession(packageId: number, gcalEventId: string, sessionNumber: number): void {
   const txn = db.transaction(() => {
     db.prepare("UPDATE gym_packages SET used_sessions = used_sessions + 1 WHERE id = ?").run(

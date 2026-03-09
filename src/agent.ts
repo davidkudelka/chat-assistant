@@ -3,7 +3,13 @@ import { config, getPeopleList, resolvePerson, Person } from "./config.js";
 import { getHistory, pushExchange } from "./conversation-store.js";
 import { sendICSInvite, sendICSUpdate, sendICSCancel } from "./ics-invite.js";
 import { getMCPTools, callMCPTool } from "./mcp-client.js";
-import { createGymPackage, getActiveGymPackage, useGymSession, cancelGymSession } from "./db.js";
+import {
+  createGymPackage,
+  getActiveGymPackage,
+  useGymSession,
+  cancelGymSession,
+  setGymPackage,
+} from "./db.js";
 
 const anthropic = new Anthropic({ apiKey: config.anthropicApiKey });
 
@@ -161,6 +167,26 @@ const LOCAL_TOOLS: Anthropic.Tool[] = [
         },
       },
       required: ["gcal_event_id"],
+    },
+  },
+  {
+    name: "gym_set_sessions",
+    description:
+      "Manually set the gym session package to specific values. " +
+      "Replaces the current active package with the given total and used counts.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        total_sessions: {
+          type: "number",
+          description: "Total number of sessions in the package",
+        },
+        used_sessions: {
+          type: "number",
+          description: "Number of sessions already used",
+        },
+      },
+      required: ["total_sessions", "used_sessions"],
     },
   },
   {
@@ -324,6 +350,25 @@ async function executeLocalTool(name: string, input: Record<string, unknown>): P
       });
     }
 
+    case "gym_set_sessions": {
+      const total = input.total_sessions as number;
+      const used = input.used_sessions as number;
+      if (used > total) {
+        return JSON.stringify({
+          status: "error",
+          message: "Used sessions cannot exceed total sessions",
+        });
+      }
+      const pkg = setGymPackage(total, used);
+      return JSON.stringify({
+        status: "ok",
+        package_id: pkg.id,
+        total_sessions: total,
+        used_sessions: used,
+        remaining: total - used,
+      });
+    }
+
     case "gym_cancel_session": {
       const cancelled = cancelGymSession(input.gcal_event_id as string);
       if (!cancelled) {
@@ -445,6 +490,7 @@ You have access to:
 ### Querying:
 - "how many gym sessions left" → call gym_get_remaining
 - "buy 10 gym sessions" → call gym_buy_sessions
+- "set gym sessions to 5 used out of 10" → call gym_set_sessions with total_sessions=10, used_sessions=5
 
 ## Important
 - Default event duration is 1 hour unless specified.

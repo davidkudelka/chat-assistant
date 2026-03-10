@@ -1,6 +1,6 @@
 import Database from "better-sqlite3";
 import path from "path";
-import type { CalendarProvider, Person } from "./config.js";
+import type { CalendarProvider, Person, PersonRole } from "./config.js";
 
 const DATA_DIR = process.env.DATA_DIR ?? "./data";
 const DB_PATH = path.join(DATA_DIR, "bot.db");
@@ -17,7 +17,8 @@ export function initDB(): void {
       key TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       email TEXT NOT NULL,
-      calendar TEXT NOT NULL DEFAULT 'google'
+      calendar TEXT NOT NULL DEFAULT 'google',
+      role TEXT NOT NULL DEFAULT 'client'
     );
 
     CREATE TABLE IF NOT EXISTS gym_packages (
@@ -47,6 +48,12 @@ export function initDB(): void {
     );
   `);
 
+  // Migration: add role column if missing (existing DBs created before role support)
+  const columns = db.prepare("PRAGMA table_info(people)").all() as { name: string }[];
+  if (!columns.some((c) => c.name === "role")) {
+    db.exec("ALTER TABLE people ADD COLUMN role TEXT NOT NULL DEFAULT 'client'");
+  }
+
   seedPeople();
 }
 
@@ -57,10 +64,16 @@ interface PersonRow {
   name: string;
   email: string;
   calendar: string;
+  role: string;
 }
 
 function rowToPerson(row: PersonRow): Person {
-  return { name: row.name, email: row.email, calendar: row.calendar as CalendarProvider };
+  return {
+    name: row.name,
+    email: row.email,
+    calendar: row.calendar as CalendarProvider,
+    role: row.role as PersonRole,
+  };
 }
 
 function seedPeople(): void {
@@ -71,12 +84,9 @@ function seedPeople(): void {
   const userName = process.env.USER_NAME ?? "David";
 
   if (userEmail) {
-    db.prepare("INSERT INTO people (key, name, email, calendar) VALUES (?, ?, ?, ?)").run(
-      userName.toLowerCase(),
-      userName,
-      userEmail,
-      "google",
-    );
+    db.prepare(
+      "INSERT INTO people (key, name, email, calendar, role) VALUES (?, ?, ?, ?, ?)",
+    ).run(userName.toLowerCase(), userName, userEmail, "google", "client");
   }
 }
 
@@ -95,7 +105,9 @@ export function getAllPeople(): Person[] {
 export function getPeopleList(): string {
   const people = getAllPeople();
   if (people.length === 0) return "No people registered.";
-  return people.map((p) => `- ${p.name}: ${p.email} (${p.calendar} calendar)`).join("\n");
+  return people
+    .map((p) => `- ${p.name}: ${p.email} (${p.calendar} calendar, role: ${p.role})`)
+    .join("\n");
 }
 
 export function upsertPerson(
@@ -103,12 +115,13 @@ export function upsertPerson(
   name: string,
   email: string,
   calendar: CalendarProvider,
+  role: PersonRole,
 ): Person {
   db.prepare(
-    `INSERT INTO people (key, name, email, calendar) VALUES (?, ?, ?, ?)
-     ON CONFLICT(key) DO UPDATE SET name = excluded.name, email = excluded.email, calendar = excluded.calendar`,
-  ).run(key.toLowerCase(), name, email, calendar);
-  return { name, email, calendar };
+    `INSERT INTO people (key, name, email, calendar, role) VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(key) DO UPDATE SET name = excluded.name, email = excluded.email, calendar = excluded.calendar, role = excluded.role`,
+  ).run(key.toLowerCase(), name, email, calendar, role);
+  return { name, email, calendar, role };
 }
 
 export function closeDB(): void {

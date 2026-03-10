@@ -2,11 +2,13 @@ import dotenv from "dotenv";
 dotenv.config();
 
 export type CalendarProvider = "google" | "apple" | "outlook" | "other";
+export type PersonRole = "client" | "trainer";
 
 export interface Person {
   name: string;
   email: string;
   calendar: CalendarProvider;
+  role: PersonRole;
 }
 
 export const config = {

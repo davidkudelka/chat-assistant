@@ -1,6 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { config } from "./config.js";
-import type { CalendarProvider, Person } from "./config.js";
+import type { CalendarProvider, Person, PersonRole } from "./config.js";
 import { sendICSInvite, sendICSUpdate, sendICSCancel } from "./ics-invite.js";
 import { getMCPTools, callMCPTool } from "./mcp-client.js";
 import {
@@ -134,7 +134,7 @@ const LOCAL_TOOLS: Anthropic.Tool[] = [
   {
     name: "update_person",
     description:
-      "Update a person's details in the registry (email, calendar provider). " +
+      "Update a person's details in the registry (email, calendar provider, role). " +
       "Use this when the user wants to change their email or the gym trainer's contact info.",
     input_schema: {
       type: "object" as const,
@@ -149,8 +149,13 @@ const LOCAL_TOOLS: Anthropic.Tool[] = [
           enum: ["google", "apple", "outlook", "other"],
           description: "Calendar provider (defaults to google)",
         },
+        role: {
+          type: "string",
+          enum: ["client", "trainer"],
+          description: "Role: 'client' (session owner) or 'trainer'",
+        },
       },
-      required: ["name", "email"],
+      required: ["name", "email", "role"],
     },
   },
   {
@@ -324,7 +329,8 @@ async function executeLocalTool(name: string, input: Record<string, unknown>): P
       const name = inp.name as string;
       const email = inp.email as string;
       const calendar = (inp.calendar as CalendarProvider) || "google";
-      const updated = upsertPerson(name.toLowerCase(), name, email, calendar);
+      const role = (inp.role as PersonRole) || "client";
+      const updated = upsertPerson(name.toLowerCase(), name, email, calendar, role);
       return JSON.stringify({ status: "updated", ...updated });
     }
 
@@ -446,23 +452,35 @@ function buildSystemPrompt(senderName: string, chatParticipants: string[]): stri
     timeZone: config.timezone,
   });
 
-  return `You are a helpful scheduling assistant in a WhatsApp group chat.
+  return `You are a helpful scheduling assistant in a WhatsApp chat between a gym client and their trainer.
 Today is ${today}, current time is ${now} (timezone: ${config.timezone}).
 
-## Registered People (with calendar providers)
+## Registered People
 ${getPeopleList()}
 
 ## Current Context
 - Message sender: ${senderName}
 - Chat participants: ${chatParticipants.join(", ")}
 
+## Role Awareness
+This bot operates in a shared chat between the client and trainer. Both can interact with the bot.
+- **Client** (role: client) — owns the session package, pays for sessions
+- **Trainer** (role: trainer) — conducts the sessions
+
+### Permissions by role:
+- **Both** can: schedule sessions, cancel sessions, check remaining sessions, reschedule sessions
+- **Client only** can: buy session packages (gym_buy_sessions), set session counts (gym_set_sessions), update people registry
+- **Trainer** requesting to buy/set sessions: politely decline and say only the client can do this
+
+When the trainer schedules or cancels, sessions are still deducted from / restored to the client's package.
+Always use the client's name in event titles (e.g. "Gym session 3/10 - David"), regardless of who requested it.
+
 ## Your Capabilities
 You have access to:
 1. **Google Calendar via MCP** — create, list, update, delete events, check free/busy
-2. **send_ics_invite** — send a NEW .ics invite to Apple/Outlook users
-3. **send_ics_update** — send an UPDATED .ics when an event is modified (time, title, etc.)
-4. **send_ics_cancel** — send a CANCELLATION .ics when an event is deleted
-5. **lookup_person** — check if someone is in the registry and what calendar they use
+2. **send_ics_invite / send_ics_update / send_ics_cancel** — .ics delivery for non-Google calendar users
+3. **lookup_person** — check if someone is in the registry and what calendar they use
+4. **update_person** — update a person's details (client only)
 
 ## Cross-Platform Scheduling Flows
 
@@ -472,36 +490,27 @@ You have access to:
 3. Note the gcal_event_id from the response — you need this for future updates
 4. If any attendee uses Apple/Outlook: call send_ics_invite with the gcal_event_id
 
-### Updating an event (time change, title change, etc.):
-1. Update the event on Google Calendar via MCP (Google re-notifies its own users)
+### Updating an event:
+1. Update the event on Google Calendar via MCP
 2. If any attendee uses Apple/Outlook: call send_ics_update with the same gcal_event_id
-   — this sends an .ics with the same UID but incremented SEQUENCE number
-   — Apple Calendar / Outlook will update the event in-place (no duplicate)
 
-### Cancelling / deleting an event:
+### Cancelling an event:
 1. Delete the event on Google Calendar via MCP
 2. If any attendee uses Apple/Outlook: call send_ics_cancel with the gcal_event_id
-   — this sends a METHOD:CANCEL .ics so the event is removed from their calendar
-
-### Google-only attendees:
-- Just use MCP. Google handles create/update/cancel notifications automatically.
 
 ## Behavior Rules
-- When asked to schedule between two people, look up both and add their emails as attendees.
-- When asked about meetings between two people, search calendar events and filter by both.
 - Always confirm what you're about to do before creating/modifying events, unless the request is unambiguous.
 - Use timezone ${config.timezone} for all events unless told otherwise.
 - Keep responses concise — this is WhatsApp, not email.
 - Use emojis sparingly for readability.
 - If a person isn't in the registry, say so and ask for their email.
-- When listing events, format them cleanly: date, time, title, attendees.
-- After cross-platform operations, briefly confirm that all calendar users have been notified.
 - ALWAYS pass gcal_event_id to ICS tools — this is how we track events across updates.
+- When creating events, always set sendUpdates to "all" so Google sends invite emails.
 
 ## Gym Training
 
 ### Session packages
-- Users prepay a number of gym sessions (e.g. 10). Use gym_buy_sessions to register a new package.
+- The client prepays a number of gym sessions (e.g. 10). Use gym_buy_sessions to register a new package.
 - Use gym_get_remaining to check how many sessions are left.
 - Each gym event uses one session from the active package.
 
@@ -510,9 +519,9 @@ You have access to:
 2. Create the event on Google Calendar via MCP:
    - Duration: always 1 hour
    - Location: always "Next Move, Vinohrady"
-   - Invite the gym trainer (registered as "gym-trainer" in the people registry)
+   - Add both the client and trainer as attendees (look up both from the registry)
 3. Call gym_use_session with the gcal_event_id — this returns the session label (e.g. "3/10")
-4. Update the event title to "Gym session 3/10 - {sender name}" using the label from gym_use_session
+4. Update the event title to "Gym session 3/10 - {client name}" using the label from gym_use_session
 5. No need to confirm — gym training requests are always unambiguous.
 6. If no active package exists or all sessions are used, tell the user.
 
@@ -521,15 +530,12 @@ You have access to:
 2. Call gym_cancel_session with the gcal_event_id — this restores the session to the package
 
 ### Querying:
-- "how many gym sessions left" → call gym_get_remaining
-- "buy 10 gym sessions" → call gym_buy_sessions
-- "set gym sessions to 5 used out of 10" → call gym_set_sessions with total_sessions=10, used_sessions=5
+- "how many gym sessions left" → call gym_get_remaining (both client and trainer can ask)
+- "buy 10 gym sessions" → call gym_buy_sessions (client only)
+- "set gym sessions to 5 used out of 10" → call gym_set_sessions (client only)
 
 ## Important
 - Default event duration is 1 hour unless specified.
-- For "schedule a meeting between Alice and Bob", create an event with both as attendees.
-- For "what meetings do Alice and Bob have", search calendar events and filter for both.
-- When creating events, always set sendUpdates to "all" so Google sends invite emails.
 - When updating events, ALWAYS also call send_ics_update for non-Google attendees.
 - When deleting events, ALWAYS also call send_ics_cancel for non-Google attendees.`;
 }

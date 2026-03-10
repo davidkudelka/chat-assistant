@@ -1,6 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { config, getPeopleList, resolvePerson, Person } from "./config.js";
-import { getHistory, pushExchange } from "./conversation-store.js";
+import { config } from "./config.js";
+import type { CalendarProvider, Person } from "./config.js";
 import { sendICSInvite, sendICSUpdate, sendICSCancel } from "./ics-invite.js";
 import { getMCPTools, callMCPTool } from "./mcp-client.js";
 import {
@@ -9,6 +9,9 @@ import {
   useGymSession,
   cancelGymSession,
   setGymPackage,
+  resolvePerson,
+  getPeopleList,
+  upsertPerson,
 } from "./db.js";
 
 const anthropic = new Anthropic({ apiKey: config.anthropicApiKey });
@@ -126,6 +129,28 @@ const LOCAL_TOOLS: Anthropic.Tool[] = [
         name: { type: "string", description: "Person's name (case-insensitive)" },
       },
       required: ["name"],
+    },
+  },
+  {
+    name: "update_person",
+    description:
+      "Update a person's details in the registry (email, calendar provider). " +
+      "Use this when the user wants to change their email or the gym trainer's contact info.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        name: {
+          type: "string",
+          description: "Person's name/key (e.g. 'David' or 'gym-trainer')",
+        },
+        email: { type: "string", description: "New email address" },
+        calendar: {
+          type: "string",
+          enum: ["google", "apple", "outlook", "other"],
+          description: "Calendar provider (defaults to google)",
+        },
+      },
+      required: ["name", "email"],
     },
   },
   {
@@ -293,6 +318,14 @@ async function executeLocalTool(name: string, input: Record<string, unknown>): P
         return JSON.stringify({ found: false, name: inp.name });
       }
       return JSON.stringify({ found: true, ...person });
+    }
+
+    case "update_person": {
+      const name = inp.name as string;
+      const email = inp.email as string;
+      const calendar = (inp.calendar as CalendarProvider) || "google";
+      const updated = upsertPerson(name.toLowerCase(), name, email, calendar);
+      return JSON.stringify({ status: "updated", ...updated });
     }
 
     case "gym_buy_sessions": {
@@ -505,17 +538,14 @@ You have access to:
  * Run the agentic loop: Claude + MCP + local tools, iterating until done.
  */
 export async function runAgent(
-  chatId: string,
   senderName: string,
   messageText: string,
   chatParticipants: string[],
 ): Promise<string> {
   const systemPrompt = buildSystemPrompt(senderName, chatParticipants);
-  const history = getHistory(chatId);
   const allTools = [...LOCAL_TOOLS, ...getMCPTools()];
 
   const messages: Anthropic.MessageParam[] = [
-    ...history,
     { role: "user", content: `[${senderName}]: ${messageText}` },
   ];
 
@@ -578,8 +608,6 @@ export async function runAgent(
   );
 
   const reply = textBlocks.map((b) => b.text).join("\n") || "Done ✅";
-
-  pushExchange(chatId, `[${senderName}]: ${messageText}`, reply);
 
   return reply;
 }

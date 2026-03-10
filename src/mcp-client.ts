@@ -55,6 +55,29 @@ export async function connectMCP(): Promise<void> {
   console.log(`   MCP tools loaded: ${cachedTools.map((t) => t.name).join(", ")}`);
 }
 
+const MCP_MAX_RETRIES = 5;
+const MCP_BASE_DELAY_MS = 2000;
+
+/**
+ * Connect to the MCP server with exponential backoff retry.
+ */
+export async function connectMCPWithRetry(): Promise<void> {
+  for (let attempt = 1; attempt <= MCP_MAX_RETRIES; attempt++) {
+    try {
+      await connectMCP();
+      return;
+    } catch (err) {
+      if (attempt === MCP_MAX_RETRIES) throw err;
+      const delay = MCP_BASE_DELAY_MS * Math.pow(2, attempt - 1);
+      console.warn(
+        `⚠️  MCP connection attempt ${attempt}/${MCP_MAX_RETRIES} failed. Retrying in ${delay / 1000}s...`,
+        err instanceof Error ? err.message : err,
+      );
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+}
+
 /**
  * Disconnect from the MCP server.
  */

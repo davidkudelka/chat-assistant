@@ -2,6 +2,10 @@ services:
   bot:
     build: .
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1g
     env_file: .env
     environment:
       - DATA_DIR=/app/data

@@ -5,12 +5,15 @@ type GroupChat = pkg.GroupChat;
 import qrcode from "qrcode-terminal";
 import { config, validateConfig } from "./config.js";
 import { runAgent } from "./agent.js";
-import { cleanupStale } from "./conversation-store.js";
-import { connectMCP, disconnectMCP } from "./mcp-client.js";
+import { connectMCPWithRetry, disconnectMCP } from "./mcp-client.js";
 import { initDB, closeDB } from "./db.js";
 import { transcribeAudio } from "./transcribe.js";
 
 import { mkdirSync } from "fs";
+
+/** Per-chat cooldown to prevent duplicate agent runs from rapid taps. */
+const DEDUP_COOLDOWN_MS = 3_000;
+const lastProcessed = new Map<string, number>();
 
 validateConfig();
 
@@ -37,14 +40,14 @@ client.on("ready", async () => {
   console.log("✅ WhatsApp Calendar Bot is online.");
   console.log(`   Trigger keyword: "${config.botTrigger}"`);
   console.log(`   Timezone: ${config.timezone}`);
-  console.log(`   Registered people: ${config.peopleMap.size}`);
+  console.log("   People registry: SQLite-backed");
 
   try {
-    console.log(`   MCP endpoint: ${config.gcalMcpUrl}`);
-    await connectMCP();
+    console.log(`   MCP endpoint: ${config.gcalMcpUrl || config.gcalMcpCommand}`);
+    await connectMCPWithRetry();
     console.log("✅ MCP connected.");
   } catch (err) {
-    console.error("❌ Failed to connect to MCP server:", err);
+    console.error("❌ Failed to connect to MCP server after all retries:", err);
     process.exit(1);
   }
 
@@ -132,10 +135,19 @@ client.on("message_create", async (msg: Message) => {
 
   console.log(`📨 [${chatId}] ${senderName}: ${userMessage}`);
 
+  // Deduplication: ignore if same chat triggered agent recently
+  const now = Date.now();
+  const lastTime = lastProcessed.get(chatId) ?? 0;
+  if (now - lastTime < DEDUP_COOLDOWN_MS) {
+    console.log(`⏭️ [${chatId}] Skipped (cooldown: ${now - lastTime}ms since last)`);
+    return;
+  }
+  lastProcessed.set(chatId, now);
+
   try {
     await msg.reply("⏳ Processing your request...");
 
-    const reply = await runAgent(chatId, senderName, userMessage, participants);
+    const reply = await runAgent(senderName, userMessage, participants);
 
     console.log(`🤖 [${chatId}] Reply: ${reply.slice(0, 100)}...`);
     await msg.reply(reply);
@@ -159,9 +171,6 @@ client.on("disconnected", (reason) => {
   console.warn("⚠️ Disconnected:", reason);
   process.exit(1);
 });
-
-// Cleanup stale conversations every 10 minutes
-setInterval(cleanupStale, 10 * 60 * 1000);
 
 // Graceful shutdown
 process.on("SIGINT", async () => {

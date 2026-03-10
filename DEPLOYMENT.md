@@ -108,13 +108,19 @@ All runtime data survives container rebuilds via Docker volumes:
 
 ## Updating the bot
 
+**Important:** Always stop the container before rebuilding to avoid Chromium profile lock errors:
+
+```bash
+docker compose down && docker compose up -d --build
+```
+
 **If cloned from GitHub:**
 
 ```bash
 # On the Pi
 cd ~/chat-assistant
 git pull
-docker compose up -d --build
+docker compose down && docker compose up -d --build
 ```
 
 **If synced via rsync:**
@@ -126,7 +132,7 @@ rsync -avz --exclude node_modules --exclude dist --exclude .wwebjs_auth --exclud
 
 # On the Pi — rebuild and restart
 cd ~/chat-assistant
-docker compose up -d --build
+docker compose down && docker compose up -d --build
 ```
 
 The WhatsApp session and database are preserved across rebuilds.
@@ -136,6 +142,7 @@ The WhatsApp session and database are preserved across rebuilds.
 | Issue | Fix |
 |---|---|
 | Build fails on ARM | Ensure `python3 make g++` are in the Dockerfile (needed for `better-sqlite3`) |
+| Chromium profile lock error | Run `docker compose down` first, or remove `wwebjs_auth/.wwebjs_auth/session/Default/SingletonLock` |
 | QR code not visible | Run `docker compose logs -f` to see console output |
 | OAuth token expired | Re-run auth on your dev machine, then `scp` the new tokens to the Pi |
 | Bot stops responding | Check `docker compose logs --tail 50` for errors, then `docker compose restart` |

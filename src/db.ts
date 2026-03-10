@@ -1,5 +1,6 @@
 import Database from "better-sqlite3";
 import path from "path";
+import type { CalendarProvider, Person } from "./config.js";
 
 const DATA_DIR = process.env.DATA_DIR ?? "./data";
 const DB_PATH = path.join(DATA_DIR, "bot.db");
@@ -12,6 +13,13 @@ export function initDB(): void {
   db.pragma("foreign_keys = ON");
 
   db.exec(`
+    CREATE TABLE IF NOT EXISTS people (
+      key TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      email TEXT NOT NULL,
+      calendar TEXT NOT NULL DEFAULT 'google'
+    );
+
     CREATE TABLE IF NOT EXISTS gym_packages (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       total_sessions INTEGER NOT NULL,
@@ -38,6 +46,69 @@ export function initDB(): void {
       non_google_recipients TEXT NOT NULL DEFAULT '[]'
     );
   `);
+
+  seedPeople();
+}
+
+// ── People registry ──
+
+interface PersonRow {
+  key: string;
+  name: string;
+  email: string;
+  calendar: string;
+}
+
+function rowToPerson(row: PersonRow): Person {
+  return { name: row.name, email: row.email, calendar: row.calendar as CalendarProvider };
+}
+
+function seedPeople(): void {
+  const count = (db.prepare("SELECT COUNT(*) as n FROM people").get() as { n: number }).n;
+  if (count > 0) return;
+
+  const userEmail = process.env.USER_EMAIL ?? "";
+  const userName = process.env.USER_NAME ?? "David";
+
+  if (userEmail) {
+    db.prepare("INSERT INTO people (key, name, email, calendar) VALUES (?, ?, ?, ?)").run(
+      userName.toLowerCase(),
+      userName,
+      userEmail,
+      "google",
+    );
+  }
+}
+
+export function resolvePerson(name: string): Person | null {
+  const row = db
+    .prepare("SELECT * FROM people WHERE key = ?")
+    .get(name.toLowerCase()) as PersonRow | undefined;
+  return row ? rowToPerson(row) : null;
+}
+
+export function getAllPeople(): Person[] {
+  const rows = db.prepare("SELECT * FROM people").all() as PersonRow[];
+  return rows.map(rowToPerson);
+}
+
+export function getPeopleList(): string {
+  const people = getAllPeople();
+  if (people.length === 0) return "No people registered.";
+  return people.map((p) => `- ${p.name}: ${p.email} (${p.calendar} calendar)`).join("\n");
+}
+
+export function upsertPerson(
+  key: string,
+  name: string,
+  email: string,
+  calendar: CalendarProvider,
+): Person {
+  db.prepare(
+    `INSERT INTO people (key, name, email, calendar) VALUES (?, ?, ?, ?)
+     ON CONFLICT(key) DO UPDATE SET name = excluded.name, email = excluded.email, calendar = excluded.calendar`,
+  ).run(key.toLowerCase(), name, email, calendar);
+  return { name, email, calendar };
 }
 
 export function closeDB(): void {

@@ -33,4 +33,4 @@ COPY tsconfig.json ./
 COPY src/ ./src/
 RUN npx tsc
 
-CMD ["sh", "-c", "rm -f /app/.wwebjs_auth/session/Default/SingletonLock && node dist/index.js"]
+CMD ["sh", "-c", "find /app/.wwebjs_auth -name 'Singleton*' -delete 2>/dev/null; node dist/index.js"]

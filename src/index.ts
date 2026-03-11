@@ -153,11 +153,12 @@ client.on("message_create", async (msg: Message) => {
 
     const reply = await runAgent(senderName, userMessage, participants, onProgress);
 
-    // Delete the status message and send the final reply
+    // Edit the status message with the final reply
     if (statusMsg) {
-      await statusMsg.delete(true).catch(() => {});
+      await statusMsg.edit(reply);
+    } else {
+      await msg.reply(reply);
     }
-    await msg.reply(reply);
 
     console.log(`🤖 [${chatId}] Reply: ${reply.slice(0, 100)}...`);
   } catch (err) {

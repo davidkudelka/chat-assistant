@@ -529,6 +529,12 @@ You have access to:
 1. Delete the event on Google Calendar
 2. Call gym_cancel_session with the gcal_event_id — this restores the session to the package
 
+### "As usual" / regular weekly schedule:
+When the user says "book gym sessions for next week as usual" (or similar), book:
+- Monday at 8:30 AM (1 hour)
+- Wednesday at 8:30 AM (1 hour)
+Both sessions follow the standard gym session creation flow above. Book them sequentially (create first, then second).
+
 ### Querying:
 - "how many gym sessions left" → call gym_get_remaining (both client and trainer can ask)
 - "buy 10 gym sessions" → call gym_buy_sessions (client only)

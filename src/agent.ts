@@ -239,6 +239,27 @@ const LOCAL_TOOLS: Anthropic.Tool[] = [
 
 const LOCAL_TOOL_NAMES = new Set(LOCAL_TOOLS.map((t) => t.name));
 
+/** Human-readable labels for progress updates. */
+const TOOL_LABELS: Record<string, string> = {
+  lookup_person: "Looking up contact...",
+  update_person: "Updating contact...",
+  send_ics_invite: "Sending calendar invite...",
+  send_ics_update: "Updating calendar invite...",
+  send_ics_cancel: "Cancelling calendar invite...",
+  gym_buy_sessions: "Registering session package...",
+  gym_get_remaining: "Checking remaining sessions...",
+  gym_use_session: "Recording session...",
+  gym_set_sessions: "Updating session count...",
+  gym_cancel_session: "Restoring session...",
+};
+
+function describeTools(toolNames: string[]): string {
+  const labels = toolNames.map((n) => TOOL_LABELS[n] ?? `Using ${n}...`);
+  return [...new Set(labels)].join("\n");
+}
+
+export type ProgressCallback = (status: string) => Promise<void>;
+
 /**
  * Resolve recipient names to Person objects.
  */
@@ -553,9 +574,11 @@ export async function runAgent(
   senderName: string,
   messageText: string,
   chatParticipants: string[],
+  onProgress?: ProgressCallback,
 ): Promise<string> {
   const systemPrompt = buildSystemPrompt(senderName, chatParticipants);
   const allTools = [...LOCAL_TOOLS, ...getMCPTools()];
+  const steps: string[] = [];
 
   const messages: Anthropic.MessageParam[] = [
     { role: "user", content: `[${senderName}]: ${messageText}` },
@@ -579,6 +602,13 @@ export async function runAgent(
     );
 
     console.log(`  🔧 Agent round ${rounds}: ${toolCalls.map((b) => b.name).join(", ")}`);
+
+    // Update progress message
+    const stepLabel = describeTools(toolCalls.map((b) => b.name));
+    steps.push(stepLabel);
+    if (onProgress) {
+      await onProgress(`⏳ Processing...\n${steps.join("\n")}`).catch(() => {});
+    }
 
     // Execute all tool calls
     const toolResults: Anthropic.ToolResultBlockParam[] = [];

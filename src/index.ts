@@ -4,7 +4,7 @@ type Message = pkg.Message;
 type GroupChat = pkg.GroupChat;
 import qrcode from "qrcode-terminal";
 import { config, validateConfig } from "./config.js";
-import { runAgent } from "./agent.js";
+import { runAgent, type ProgressCallback } from "./agent.js";
 import { connectMCPWithRetry, disconnectMCP } from "./mcp-client.js";
 import { initDB, closeDB } from "./db.js";
 import { transcribeAudio } from "./transcribe.js";
@@ -145,12 +145,22 @@ client.on("message_create", async (msg: Message) => {
   lastProcessed.set(chatId, now);
 
   try {
-    await msg.reply("⏳ Processing your request...");
+    const statusMsg = await msg.reply("⏳ Processing your request...");
 
-    const reply = await runAgent(senderName, userMessage, participants);
+    const onProgress: ProgressCallback = async (status) => {
+      if (statusMsg) await statusMsg.edit(status);
+    };
+
+    const reply = await runAgent(senderName, userMessage, participants, onProgress);
+
+    // Edit the status message with the final reply
+    if (statusMsg) {
+      await statusMsg.edit(reply);
+    } else {
+      await msg.reply(reply);
+    }
 
     console.log(`🤖 [${chatId}] Reply: ${reply.slice(0, 100)}...`);
-    await msg.reply(reply);
   } catch (err) {
     console.error(`❌ Agent error [${chatId}]:`, err);
     await msg.reply("⚠️ Something went wrong. Please try again.");

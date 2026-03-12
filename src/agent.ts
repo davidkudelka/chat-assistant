@@ -465,15 +465,58 @@ async function executeTool(name: string, input: Record<string, unknown>): Promis
  * Build the system prompt with cross-platform calendar awareness.
  */
 function buildSystemPrompt(senderName: string, senderRole: string, chatParticipants: string[]): string {
-  const today = new Date().toLocaleDateString("en-US", {
+  // Build timezone-aware date info to prevent day-of-week miscalculations
+  const nowDate = new Date();
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone: config.timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  const parts = formatter.formatToParts(nowDate);
+  const y = Number(parts.find((p) => p.type === "year")!.value);
+  const m = Number(parts.find((p) => p.type === "month")!.value) - 1;
+  const d = Number(parts.find((p) => p.type === "day")!.value);
+  const localToday = new Date(y, m, d);
+  const dayOfWeek = localToday.getDay(); // 0=Sun
+
+  // Monday=0 week layout (European convention: Mon-Sun)
+  const dayNames = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+  // Convert JS dayOfWeek (0=Sun) to Mon-based (0=Mon)
+  const monBasedDay = (dayOfWeek + 6) % 7;
+
+  function formatIso(date: Date): string {
+    const yy = date.getFullYear();
+    const mm = String(date.getMonth() + 1).padStart(2, "0");
+    const dd = String(date.getDate()).padStart(2, "0");
+    return `${yy}-${mm}-${dd}`;
+  }
+
+  // This week (Mon-Sun containing today)
+  const thisWeek: string[] = [];
+  for (let i = 0; i < 7; i++) {
+    const date = new Date(y, m, d + (i - monBasedDay));
+    const iso = formatIso(date);
+    const label = i === monBasedDay ? `${dayNames[i]} (TODAY)` : dayNames[i];
+    thisWeek.push(`  ${label}: ${iso}`);
+  }
+
+  // Next week (Mon-Sun)
+  const nextWeek: string[] = [];
+  for (let i = 0; i < 7; i++) {
+    const date = new Date(y, m, d + (7 - monBasedDay + i));
+    const iso = formatIso(date);
+    nextWeek.push(`  ${dayNames[i]}: ${iso}`);
+  }
+
+  const today = localToday.toLocaleDateString("en-US", {
     weekday: "long",
     year: "numeric",
     month: "long",
     day: "numeric",
-    timeZone: config.timezone,
   });
 
-  const now = new Date().toLocaleTimeString("en-US", {
+  const now = nowDate.toLocaleTimeString("en-US", {
     hour: "2-digit",
     minute: "2-digit",
     timeZone: config.timezone,
@@ -481,6 +524,14 @@ function buildSystemPrompt(senderName: string, senderRole: string, chatParticipa
 
   return `You are a helpful scheduling assistant in a WhatsApp chat between a gym client and their trainer.
 Today is ${today}, current time is ${now} (timezone: ${config.timezone}).
+
+### This week's dates:
+${thisWeek.join("\n")}
+
+### Next week's dates:
+${nextWeek.join("\n")}
+
+IMPORTANT: When the user says "this Friday", "next Monday", etc., ALWAYS look up the exact date from the tables above. Do NOT calculate dates yourself.
 
 ## Registered People
 ${getPeopleList()}

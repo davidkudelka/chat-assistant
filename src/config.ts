@@ -9,6 +9,7 @@ export interface Person {
   email: string;
   calendar: CalendarProvider;
   role: PersonRole;
+  phone?: string;
 }
 
 export const config = {

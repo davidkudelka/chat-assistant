@@ -6,7 +6,7 @@ import qrcode from "qrcode-terminal";
 import { config, validateConfig } from "./config.js";
 import { runAgent, type ProgressCallback } from "./agent.js";
 import { connectMCPWithRetry, disconnectMCP } from "./mcp-client.js";
-import { initDB, closeDB } from "./db.js";
+import { initDB, closeDB, resolvePersonByPhone } from "./db.js";
 import { transcribeAudio } from "./transcribe.js";
 
 import { mkdirSync } from "fs";
@@ -111,9 +111,12 @@ client.on("message_create", async (msg: Message) => {
     }
   }
 
-  // Get sender info
+  // Get sender info and resolve role
   const contact = await msg.getContact();
   const senderName = contact.pushname || contact.name || contact.number;
+  const senderPhone = contact.id.user; // digits-only phone number
+  const knownPerson = resolvePersonByPhone(senderPhone);
+  const senderRole = knownPerson?.role ?? "unknown";
 
   // Get chat participants (for group chats)
   let participants: string[] = [senderName];
@@ -151,7 +154,7 @@ client.on("message_create", async (msg: Message) => {
       if (statusMsg) await statusMsg.edit(status);
     };
 
-    const reply = await runAgent(senderName, userMessage, participants, onProgress);
+    const reply = await runAgent(senderName, senderRole, userMessage, participants, onProgress);
 
     // Edit the status message with the final reply
     if (statusMsg) {

@@ -18,7 +18,8 @@ export function initDB(): void {
       name TEXT NOT NULL,
       email TEXT NOT NULL,
       calendar TEXT NOT NULL DEFAULT 'google',
-      role TEXT NOT NULL DEFAULT 'client'
+      role TEXT NOT NULL DEFAULT 'client',
+      phone TEXT
     );
 
     CREATE TABLE IF NOT EXISTS gym_packages (
@@ -48,10 +49,13 @@ export function initDB(): void {
     );
   `);
 
-  // Migration: add role column if missing (existing DBs created before role support)
+  // Migrations: add columns missing from older DB schemas
   const columns = db.prepare("PRAGMA table_info(people)").all() as { name: string }[];
   if (!columns.some((c) => c.name === "role")) {
     db.exec("ALTER TABLE people ADD COLUMN role TEXT NOT NULL DEFAULT 'client'");
+  }
+  if (!columns.some((c) => c.name === "phone")) {
+    db.exec("ALTER TABLE people ADD COLUMN phone TEXT");
   }
 
   seedPeople();
@@ -65,6 +69,7 @@ interface PersonRow {
   email: string;
   calendar: string;
   role: string;
+  phone: string | null;
 }
 
 function rowToPerson(row: PersonRow): Person {
@@ -73,6 +78,7 @@ function rowToPerson(row: PersonRow): Person {
     email: row.email,
     calendar: row.calendar as CalendarProvider,
     role: row.role as PersonRole,
+    ...(row.phone ? { phone: row.phone } : {}),
   };
 }
 
@@ -110,18 +116,26 @@ export function getPeopleList(): string {
     .join("\n");
 }
 
+export function resolvePersonByPhone(phone: string): Person | null {
+  const row = db
+    .prepare("SELECT * FROM people WHERE phone = ?")
+    .get(phone) as PersonRow | undefined;
+  return row ? rowToPerson(row) : null;
+}
+
 export function upsertPerson(
   key: string,
   name: string,
   email: string,
   calendar: CalendarProvider,
   role: PersonRole,
+  phone?: string,
 ): Person {
   db.prepare(
-    `INSERT INTO people (key, name, email, calendar, role) VALUES (?, ?, ?, ?, ?)
-     ON CONFLICT(key) DO UPDATE SET name = excluded.name, email = excluded.email, calendar = excluded.calendar, role = excluded.role`,
-  ).run(key.toLowerCase(), name, email, calendar, role);
-  return { name, email, calendar, role };
+    `INSERT INTO people (key, name, email, calendar, role, phone) VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(key) DO UPDATE SET name = excluded.name, email = excluded.email, calendar = excluded.calendar, role = excluded.role, phone = excluded.phone`,
+  ).run(key.toLowerCase(), name, email, calendar, role, phone ?? null);
+  return { name, email, calendar, role, ...(phone ? { phone } : {}) };
 }
 
 export function closeDB(): void {

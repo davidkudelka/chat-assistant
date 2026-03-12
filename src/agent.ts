@@ -134,8 +134,9 @@ const LOCAL_TOOLS: Anthropic.Tool[] = [
   {
     name: "update_person",
     description:
-      "Update a person's details in the registry (email, calendar provider, role). " +
-      "Use this when the user wants to change their email or the gym trainer's contact info.",
+      "Update a person's details in the registry (email, calendar provider, role, phone). " +
+      "Use this when the user wants to change their email or the gym trainer's contact info. " +
+      "The phone field should be the WhatsApp number (digits only, with country code, e.g. '420123456789').",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -153,6 +154,10 @@ const LOCAL_TOOLS: Anthropic.Tool[] = [
           type: "string",
           enum: ["client", "trainer"],
           description: "Role: 'client' (session owner) or 'trainer'",
+        },
+        phone: {
+          type: "string",
+          description: "WhatsApp phone number (digits only with country code, e.g. '420123456789')",
         },
       },
       required: ["name", "email", "role"],
@@ -351,7 +356,8 @@ async function executeLocalTool(name: string, input: Record<string, unknown>): P
       const email = inp.email as string;
       const calendar = (inp.calendar as CalendarProvider) || "google";
       const role = (inp.role as PersonRole) || "client";
-      const updated = upsertPerson(name.toLowerCase(), name, email, calendar, role);
+      const phone = inp.phone as string | undefined;
+      const updated = upsertPerson(name.toLowerCase(), name, email, calendar, role, phone);
       return JSON.stringify({ status: "updated", ...updated });
     }
 
@@ -458,7 +464,7 @@ async function executeTool(name: string, input: Record<string, unknown>): Promis
 /**
  * Build the system prompt with cross-platform calendar awareness.
  */
-function buildSystemPrompt(senderName: string, chatParticipants: string[]): string {
+function buildSystemPrompt(senderName: string, senderRole: string, chatParticipants: string[]): string {
   const today = new Date().toLocaleDateString("en-US", {
     weekday: "long",
     year: "numeric",
@@ -480,7 +486,7 @@ Today is ${today}, current time is ${now} (timezone: ${config.timezone}).
 ${getPeopleList()}
 
 ## Current Context
-- Message sender: ${senderName}
+- Message sender: ${senderName} (role: ${senderRole})
 - Chat participants: ${chatParticipants.join(", ")}
 
 ## Role Awareness
@@ -572,11 +578,12 @@ Both sessions follow the standard gym session creation flow above. Book them seq
  */
 export async function runAgent(
   senderName: string,
+  senderRole: string,
   messageText: string,
   chatParticipants: string[],
   onProgress?: ProgressCallback,
 ): Promise<string> {
-  const systemPrompt = buildSystemPrompt(senderName, chatParticipants);
+  const systemPrompt = buildSystemPrompt(senderName, senderRole, chatParticipants);
   const allTools = [...LOCAL_TOOLS, ...getMCPTools()];
   const steps: string[] = [];
 

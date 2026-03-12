@@ -522,8 +522,21 @@ function buildSystemPrompt(senderName: string, senderRole: string, chatParticipa
     timeZone: config.timezone,
   });
 
+  // Compute UTC offset for the configured timezone (e.g. "+01:00" or "+02:00" for Prague)
+  const utcFormatter = new Intl.DateTimeFormat("en-US", {
+    timeZone: config.timezone,
+    timeZoneName: "shortOffset",
+  });
+  const tzPart = utcFormatter.formatToParts(nowDate).find((p) => p.type === "timeZoneName");
+  // tzPart.value is like "GMT+1" or "GMT+2", convert to "+01:00" format
+  const rawOffset = tzPart?.value ?? "GMT+0";
+  const offsetMatch = rawOffset.match(/GMT([+-]?)(\d+)/);
+  const offsetSign = offsetMatch?.[1] || "+";
+  const offsetHours = offsetMatch?.[2] ?? "0";
+  const tzOffset = `${offsetSign}${offsetHours.padStart(2, "0")}:00`;
+
   return `You are a helpful scheduling assistant in a WhatsApp chat between a gym client and their trainer.
-Today is ${today}, current time is ${now} (timezone: ${config.timezone}).
+Today is ${today}, current time is ${now} (timezone: ${config.timezone}, UTC offset: ${tzOffset}).
 
 ### This week's dates:
 ${thisWeek.join("\n")}
@@ -531,7 +544,10 @@ ${thisWeek.join("\n")}
 ### Next week's dates:
 ${nextWeek.join("\n")}
 
-IMPORTANT: When the user says "this Friday", "next Monday", etc., ALWAYS look up the exact date from the tables above. Do NOT calculate dates yourself.
+IMPORTANT DATE/TIME RULES:
+- When the user says "this Friday", "next Monday", etc., ALWAYS look up the exact date from the tables above. Do NOT calculate dates yourself.
+- When passing datetime to ANY tool (MCP or local), ALWAYS use ISO 8601 with the timezone offset: e.g. "2026-03-13T15:00:00${tzOffset}" — NEVER omit the offset.
+- Example: "this Friday at 3 PM" → "2026-03-13T15:00:00${tzOffset}"
 
 ## Registered People
 ${getPeopleList()}
@@ -660,6 +676,9 @@ export async function runAgent(
     );
 
     console.log(`  🔧 Agent round ${rounds}: ${toolCalls.map((b) => b.name).join(", ")}`);
+    for (const call of toolCalls) {
+      console.log(`     ${call.name}:`, JSON.stringify(call.input));
+    }
 
     // Update progress message
     const stepLabel = describeTools(toolCalls.map((b) => b.name));

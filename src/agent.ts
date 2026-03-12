@@ -651,7 +651,17 @@ export async function runAgent(
   onProgress?: ProgressCallback,
 ): Promise<string> {
   const systemPrompt = buildSystemPrompt(senderName, senderRole, chatParticipants);
-  const allTools = [...LOCAL_TOOLS, ...getMCPTools()];
+  // Only include MCP tools we actually use (reduces token count per round)
+  const ALLOWED_MCP_TOOLS = new Set([
+    "create-event",
+    "update-event",
+    "delete-event",
+    "list-events",
+    "search-events",
+    "get-event",
+  ]);
+  const filteredMCPTools = getMCPTools().filter((t) => ALLOWED_MCP_TOOLS.has(t.name));
+  const allTools = [...LOCAL_TOOLS, ...filteredMCPTools];
   const steps: string[] = [];
 
   const messages: Anthropic.MessageParam[] = [

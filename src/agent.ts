@@ -702,12 +702,14 @@ export async function runAgent(
     for (const call of toolCalls) {
       try {
         const result = await executeTool(call.name, call.input as Record<string, unknown>);
+        console.log(`     ${call.name} result:`, result.slice(0, 300));
         toolResults.push({
           type: "tool_result",
           tool_use_id: call.id,
           content: result,
         });
       } catch (err) {
+        console.error(`     ${call.name} error:`, err);
         toolResults.push({
           type: "tool_result",
           tool_use_id: call.id,
